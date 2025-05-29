@@ -1,0 +1,8 @@
+
+   Compiling generated_project v0.1.0 (C:\Users\QDD2KOR\Documents\rust-ai\Rust_IDE\src\Rust_Project)
+error[E0601]: `main` function not found in crate `generated_project`
+  |
+  = note: consider adding a `main` function to `src\main.rs`
+
+For more information about this error, try `rustc --explain E0601`.
+error: could not compile `generated_project` (bin "generated_project") due to 1 previous error

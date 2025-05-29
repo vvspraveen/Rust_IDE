@@ -44,6 +44,7 @@ struct MyApp {
     file_op_state: Arc<Mutex<FileOpState>>,
     open_tabs: Vec<(PathBuf, String)>,
     current_tab: Option<usize>,
+    prompt_focused: bool,
 }
 
 impl Default for MyApp {
@@ -61,6 +62,7 @@ impl Default for MyApp {
             file_op_state: Arc::new(Mutex::new(FileOpState::default())),
             open_tabs: Vec::new(),
             current_tab: None,
+            prompt_focused: false,
         }
     }
 }
@@ -76,39 +78,46 @@ impl App for MyApp {
         } else {
             ctx.set_visuals(egui::Visuals::light());
         }
-
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("🧠 Prompt:");
-                ui.text_edit_singleline(&mut self.prompt_input);
-                if ui.button("▶️ Run").clicked() && !*self.running.lock().unwrap() {
-                    self.run_task(ctx.clone());
-                }
-                // if ui.button("💾 Save Output").clicked() {
-                //     let contents = self.output.lock().unwrap().clone();
-                //     let _ = fs::write("output.txt", contents);
-                // }
-                if ui.button("💾 Save Output to file").clicked() {
-                        let contents = self.output.lock().unwrap().clone();
-                        let path = PathBuf::from("output.txt");
-                        match fs::write(&path, &contents) {
-                            Ok(_) => {
-                                *self.phase.lock().unwrap() = "✅ Output saved to output.txt".to_string();
-                                // open in tab
-                                self.open_tabs.push((path.clone(), contents));
-                                self.current_tab = Some(self.open_tabs.len() - 1);
-                            }
-                            Err(e) => {
-                                *self.phase.lock().unwrap() = format!("❌ Failed to save: {e}");
-                            }
-                        }
-                    }
-
-                if ui.button("🔧 Build & Run").clicked() && !*self.running.lock().unwrap() {
-                    self.run_project(ctx.clone());
-                }
+        
+        // Blinking cursor effect when focused
+        if self.prompt_focused {
+            ctx.request_repaint();
+            let blink = (ctx.input(|i| i.time) % 1.0) < 0.5;
+            ctx.set_cursor_icon(if blink {
+                egui::CursorIcon::Text
+            } else {
+                egui::CursorIcon::Default
             });
-        });
+        }
+
+   egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+    ui.horizontal(|ui| {
+        if ui.button("▶️ Run").clicked() && !*self.running.lock().unwrap() {
+            self.run_task(ctx.clone());
+        }
+
+        if ui.button("💾 Save Output to file").clicked() {
+            let contents = self.output.lock().unwrap().clone();
+            let path = PathBuf::from("output.txt");
+            match fs::write(&path, &contents) {
+                Ok(_) => {
+                    *self.phase.lock().unwrap() = "✅ Output saved to output.txt".to_string();
+                    self.open_tabs.push((path.clone(), contents));
+                    self.current_tab = Some(self.open_tabs.len() - 1);
+                }
+                Err(e) => {
+                    *self.phase.lock().unwrap() = format!("❌ Failed to save: {e}");
+                }
+            }
+        }
+
+        if ui.button("🔧 Build & Run").clicked() && !*self.running.lock().unwrap() {
+            self.run_project(ctx.clone());
+        }
+    });
+});
+
+
 
         egui::SidePanel::left("file_tree").resizable(true).default_width(200.0).show(ctx, |ui| {
             ui.heading("📂 Project Files");
@@ -131,85 +140,104 @@ impl App for MyApp {
             ui.label(format!("Status: {}", self.phase.lock().unwrap()));
         });
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-
-    ui.horizontal(|ui| {
-    let mut to_close: Option<usize> = None;
-
-    for (i, (path, _)) in self.open_tabs.iter().enumerate() {
-        let filename = path.file_name().unwrap().to_string_lossy();
-
+egui::CentralPanel::default().show(ctx, |ui| {
+    egui::ScrollArea::both().id_source("main_scroll").show(ui, |ui| {
+        // Tab Bar
         ui.horizontal(|ui| {
-            let selected = Some(i) == self.current_tab;
-            if ui.selectable_label(selected, filename.clone()).clicked() {
-                self.current_tab = Some(i);
+            let mut to_close: Option<usize> = None;
+
+            for (i, (path, _)) in self.open_tabs.iter().enumerate() {
+                let filename = path.file_name().unwrap().to_string_lossy();
+
+                ui.horizontal(|ui| {
+                    let selected = Some(i) == self.current_tab;
+                    if ui.selectable_label(selected, filename.clone()).clicked() {
+                        self.current_tab = Some(i);
+                    }
+                    if ui.button("✕").on_hover_text("Close tab").clicked() {
+                        to_close = Some(i);
+                    }
+                });
             }
-            if ui.button("✕").on_hover_text("Close tab").clicked() {
-                to_close = Some(i);
+
+            if let Some(idx) = to_close {
+                self.open_tabs.remove(idx);
+                if let Some(current) = self.current_tab {
+                    if current == idx {
+                        self.current_tab = if self.open_tabs.is_empty() {
+                            None
+                        } else if idx >= self.open_tabs.len() {
+                            Some(self.open_tabs.len() - 1)
+                        } else {
+                            Some(idx)
+                        };
+                    } else if current > idx {
+                        self.current_tab = Some(current - 1);
+                    }
+                }
             }
         });
-    }
 
-    if let Some(idx) = to_close {
-        self.open_tabs.remove(idx);
-        if let Some(current) = self.current_tab {
-            if current == idx {
-                self.current_tab = if self.open_tabs.is_empty() {
-                    None
-                } else if idx >= self.open_tabs.len() {
-                    Some(self.open_tabs.len() - 1)
-                } else {
-                    Some(idx)
-                };
-            } else if current > idx {
-                self.current_tab = Some(current - 1);
-            }
-        }
-    }
-});
-
-
-
-
+       // Code Editor
 if let Some(index) = self.current_tab {
     if let Some((path, content)) = self.open_tabs.get_mut(index) {
         let path = path.clone();
         let lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-
-        ui.separator();
-        ui.heading(format!("📄 Editing: {}", path.display()));
-
         let mut save_clicked = false;
 
-        egui::ScrollArea::both().id_source("editor_scroll").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Gutter with line numbers
-                ui.vertical(|ui| {
-                    for (i, _) in lines.iter().enumerate() {
-                        ui.label(
-                            egui::RichText::new(format!("{:>3}", i + 1))
-                                .monospace()
-                                .small(),
-                        );
-                    }
-                });
+        ui.add_space(10.0);
 
-                // Editor Area
+        egui::Frame::group(ui.style())
+            .fill(ui.visuals().panel_fill)
+            .stroke(egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_fill)) // Light border
+            .rounding(egui::Rounding::same(6.0))
+            .inner_margin(egui::Margin::same(10.0))
+            .show(ui, |ui| {
                 ui.vertical(|ui| {
-                    ui.add_sized(
-                        [ui.available_width(), 20.0 * lines.len().max(1) as f32],
-                        egui::TextEdit::multiline(content)
-                            .font(egui::TextStyle::Monospace)
-                            .code_editor()
-                            .desired_rows(lines.len().max(1)),
+                    ui.label(
+                        egui::RichText::new(format!("📝 Editing: {}", path.display()))
+                            .heading()
+                            .strong()
+                            .color(ui.visuals().hyperlink_color),
                     );
-                    //render_highlighted_code(ui, content);
+                    ui.add_space(6.0);
 
-                    ui.add_space(8.0);
-                    save_clicked = ui.button("💾 Save File").clicked();
+                    ui.horizontal_top(|ui| {
+                        // Line Numbers
+                        ui.vertical(|ui| {
+                            for (i, _) in lines.iter().enumerate() {
+                                ui.label(
+                                    egui::RichText::new(format!("{:>3}", i + 1))
+                                        .monospace()
+                                        .small()
+                                        .weak(),
+                                );
+                            }
+                        });
+
+                        // Text Editor
+                        ui.vertical(|ui| {
+                            ui.add_sized(
+                                [ui.available_width(), 20.0 * lines.len().max(1) as f32],
+                                egui::TextEdit::multiline(content)
+                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .desired_rows(lines.len().max(1))
+                                    .lock_focus(true),
+                            );
+                            ui.add_space(8.0);
+                            save_clicked = ui
+                                .add_sized(
+                                    [120.0, 30.0],
+                                    egui::Button::new("💾 Save File")
+                                        .fill(ui.visuals().selection.bg_fill)
+                                        .stroke(egui::Stroke::new(1.0, ui.visuals().text_color())),
+                                )
+                                .clicked();
+                        });
+                    });
                 });
             });
-        });
 
         if save_clicked {
             let _ = fs::write(&path, &*content);
@@ -240,7 +268,6 @@ if let Some(index) = self.current_tab {
 
                 let _ = fs::write("Rust_Project/Cargo.toml", cargo_toml);
 
-                // 🔁 Refresh Cargo.toml if it's open
                 if let Some(cargo_tab) = self.open_tabs.iter_mut().find(|(p, _)| {
                     p.file_name().map_or(false, |f| f == "Cargo.toml")
                 }) {
@@ -252,7 +279,46 @@ if let Some(index) = self.current_tab {
     }
 }
 
+
+        // AI Prompt Section
+// AI Prompt Section - Centered and just above Terminal Output
+ui.add_space(10.0);
+ui.vertical_centered(|ui| {
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().extreme_bg_color)
+        .rounding(egui::Rounding::same(6.0))
+        .inner_margin(egui::Margin::symmetric(10.0, 12.0))
+        .show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.prompt_input)
+                        .hint_text("Ask DeepSeek Coder to generate Rust code...")
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY), // Dynamic width
+                );
+
+                if response.gained_focus() {
+                    self.prompt_focused = true;
+                }
+                if response.lost_focus() {
+                    self.prompt_focused = false;
+                }
+
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    self.run_task(ctx.clone());
+                }
+
+                ui.add_space(6.0);
+                if ui.button("Generate Code").clicked() && !*self.running.lock().unwrap() {
+                    self.run_task(ctx.clone());
+                }
+            });
         });
+});
+ui.add_space(10.0);
+
+    });
+});
 
 
         egui::TopBottomPanel::bottom("terminal_output").resizable(true).show(ctx, |ui| {
@@ -269,8 +335,6 @@ if let Some(index) = self.current_tab {
 }
 
 impl MyApp {
-
-    
 
     fn configure_fonts(&self, ctx: &egui::Context) {
         let fonts = FontDefinitions::default();

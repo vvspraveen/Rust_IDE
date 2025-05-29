@@ -1,1 +1,0 @@
-C:\Users\ugy2kor\Desktop\Rust_App\praveen_rust_frontend\rust_cli_gui\Rust_Project\target\debug\generated_project.exe: C:\Users\ugy2kor\Desktop\Rust_App\praveen_rust_frontend\rust_cli_gui\Rust_Project\src\main.rs
